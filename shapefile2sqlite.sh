@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Command pour télécharger les shapefile du site du gouvernement et extraire les cendroides de chaque parcelle dans un fichier sqlite
+# Commandes pour télécharger les shapefile du site du gouvernement et extraire les cendroides de chaque parcelle dans un fichier sqlite
 DEP=$1
 OUT=cadastre.sqlite
 FILENAME=cadastre-$DEP-parcelles-shp.zip
 SRS=EPSG:4326
 TABLE=parcelles
+
 # Download parcelle from the net
 wget https://cadastre.data.gouv.fr/data/etalab-cadastre/2019-07-01/shp/departements/$DEP/$FILENAME
 unzip $FILENAME

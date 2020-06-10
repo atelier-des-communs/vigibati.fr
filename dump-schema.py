@@ -33,6 +33,7 @@ attributes=[
     Attribute("siret", "SIRET", "text", "details"),
 
     Attribute("location", "emplacement", "location", "hidden"),
+    Attribute("file", "fichier", "text", "hidden"),
     Attribute("adresse", "adresse", "text"),
     Attribute("cadastres", "cadastres", "text", "details"),
     Attribute("loc_approx", "lieu approximatif", "boolean", "hidden"),

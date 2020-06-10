@@ -8,6 +8,7 @@ import json
 import requests
 import traceback
 from io import StringIO
+from os import path
 
 
 GEO_SEARCH_URL="https://api-adresse.data.gouv.fr/search/csv/"
@@ -71,15 +72,28 @@ SURF_TYPE={
 
 currFilename= ""
 currLine=0
+currStderr=sys.stderr
 
 def eprint(*args, **kwargs):
-    print("%s:%d: " % (currFilename, currLine), file=sys.stderr)
-    print(*args, file=sys.stderr, **kwargs)
+    print("%s:%d: " % (currFilename, currLine), file=currStderr)
+    print(*args, file=currStderr, **kwargs)
+
+class NoFail():
+    def __init__(self, context):
+        self.context=context
+    def __enter__(self):
+        return None
+    def __exit__(self, type, value, tb):
+        if value :
+            print("Error happened for ", self.context, value, file=sys.stderr)
+            traceback.print_tb(tb, file=sys.stderr)
+        return True
 
 # Fetch coords from addresses
 def adresses_coords(addresses) :
     res = dict()
     queries = []
+    eprint("missing %d addresses" % len(addresses))
     for item in addresses :
 
         key = item['insee'] + ':' + item['address']
@@ -95,6 +109,8 @@ def adresses_coords(addresses) :
 
     # Query HTTP service only if necessary
     if len(queries) > 0 :
+
+        eprint("POST request with %d addresses to resolve" % (len(queries)))
 
         # Prepare CSV input
         csvdata = StringIO()
@@ -317,71 +333,81 @@ def process_line(row) :
         date_decision=getval('DATEREELLE_DECISION_FAV'),
         date_chantier=getval('DATEREELLE_DOC'))
 
-def writejson(row) :
-    json.dump(row, sys.stdout, indent=4)
+def writejson(row, outstream) :
+    json.dump(row, outstream, indent=4)
 
-# Accumulate / update permis
-permis_dict = dict()
-for filename in sys.argv[1:] :
+
+def process_file(filename, outstream, errstream) :
+
+    global currFilename, currLine, currStderr
+
+    # Result to be eventually dumped
+    permis_dict = dict()
+
     currFilename=filename
+    currStderr=errstream
 
     with open(filename) as file :
         csv = DictReader(file)
 
         for i, row in enumerate(csv) :
-            currLine=i
-            try:
+            with NoFail((i, row)) :
+                currLine=i
                 permis = process_line(row)
+                permis["file"] = path.basename(filename)
                 id = permis["id_permis"]
                 permis_dict[id] = permis
 
-            except Exception as e :
-                eprint(e)
-                traceback.print_exc(file=sys.stderr)
+    with NoFail("Get addresses"):
 
-# Gather missing adresses
-addresses = []
-for key, permis in permis_dict.items() :
-    if permis['location']['lat'] is None :
-        addr = permis['adresse'].strip()
-        if len(addr) > 0 :
-            addresses.append(dict(
-                id=key,
-                insee=permis['commune_insee'],
-                address=addr))
+        # Gather missing adresses
+        addresses = []
+        for key, permis in permis_dict.items() :
+            if permis['location']['lat'] is None :
+                addr = permis['adresse'].strip()
+                if len(addr) > 0 :
+                    addresses.append(dict(
+                        id=key,
+                        insee=permis['commune_insee'],
+                        address=addr))
 
-# Get coords from addresses (REST service)
-coords = adresses_coords(addresses)
-for id, res in coords.items() :
-    score = parsefloat(res['result_score'])
-    if score is not None and score > 0.5 :
-        permis_dict[id]['location']['lon'] = parsefloat(res['longitude'])
-        permis_dict[id]['location']['lat'] = parsefloat(res['latitude'])
+            # Get coords from addresses (REST service + sqlite cache)
+            coords = adresses_coords(addresses)
 
+            for id, res in coords.items():
+                with NoFail((id, res)):
+                    score = parsefloat(res.get('result_score', None))
+                    if score is not None and score > 0.5 :
+                        permis_dict[id]['location']['lon'] = parsefloat(res['longitude'])
+                        permis_dict[id]['location']['lat'] = parsefloat(res['latitude'])
 
-# Still no coord ? Use the one of the city
-for id, permis in permis_dict.items() :
-    if permis['location']['lon'] is None :
-        permis["loc_approx"] = True
-        insee = permis["commune_insee"]
-        if insee in communes :
-            commune = communes[insee]
-            if 'lon' in commune :
-                permis['location']['lon'] = commune['lon']
-                permis['location']['lat'] = commune['lat']
+        # Still no coord ? Use the one of the city and set approx to true
+        for id, permis in permis_dict.items() :
+            with NoFail((id, permis)):
+                if permis['location']['lat'] is None :
+                    permis["loc_approx"] = True
+                    insee = permis["commune_insee"]
+                    if insee in communes :
+                        commune = communes[insee]
+                        if 'lon' in commune :
+                            permis['location']['lon'] = commune['lon']
+                            permis['location']['lat'] = commune['lat']
 
-# Dump in output
-sys.stdout.write("[")
-first = True
-for key, permis in permis_dict.items() :
-    if first:
-        first = False
-    else:
-        sys.stdout.write(",")
-    writejson(permis)
-sys.stdout.write("]")
+    # Dump in output
+    outstream.write("[")
+    first = True
+    for key, permis in permis_dict.items() :
+        if first:
+            first = False
+        else:
+            outstream.write(",")
+        writejson(permis, outstream)
+    outstream.write("]")
 
-
+# Main : process files listed in input
+if __name__ == '__main__':
+    for filename in sys.argv[1:] :
+        process_file(filename, sys.stdout, sys.stderr)
 
 
 
