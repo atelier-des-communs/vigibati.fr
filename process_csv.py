@@ -22,7 +22,6 @@ CACHE_CONN = sqlite3.connect(CACHE_FILE)
 CACHE_CURSOR = CACHE_CONN.cursor()
 
 COMMUNE_FILE="data/communes.csv"
-COMMUNE_COORDS_FILE = "data/communes-coords.csv"
 
 TYPE_EVT={
     1: "depot",
@@ -145,20 +144,18 @@ communes = dict()
 with open(COMMUNE_FILE) as f :
     csv = DictReader(f, delimiter=";")
     for row in csv :
+        lat=None
+        lon=None
+        coords = row['coordonnees_gps']
+        if coords :
+            lat, lon = coords.split(",")
+            lat = float(lat)
+            lon = float(lon)
         communes[row['Code_commune_INSEE']] = dict(
             cp=row['Code_postal'],
-            nom=row['Nom_commune'])
-
-# Coords of communes
-with open(COMMUNE_COORDS_FILE) as f :
-    csv = DictReader(f, delimiter=",")
-    for row in csv :
-        insee = row['insee']
-        if insee in communes :
-            commune = communes[insee]
-            commune['lon'] = float(row['lon'])
-            commune['lat'] = float(row['lat'])
-
+            nom=row['Nom_commune'],
+            lat=lat,
+            lon=lon)
 
 def map_int(value, mapvals) :
     if value is None or value == "" :
@@ -183,6 +180,7 @@ def to_parcelle_no_prefix(commune, cadastre) :
     return commune + section + parcelle
 
 def get_coords(parcelle_id) :
+
     COORDS_CURSOR.execute("SELECT x, y FROM coords where id_no_prefix = ?", (parcelle_id,))
     res = COORDS_CURSOR.fetchone()
 
@@ -371,15 +369,19 @@ def process_file(filename, outstream, errstream) :
                         insee=permis['commune_insee'],
                         address=addr))
 
-            # Get coords from addresses (REST service + sqlite cache)
-            coords = adresses_coords(addresses)
+        # Get coords from addresses (REST service + sqlite cache)
+        coords = adresses_coords(addresses)
 
-            for id, res in coords.items():
-                with NoFail((id, res)):
-                    score = parsefloat(res.get('result_score', None))
-                    if score is not None and score > 0.5 :
-                        permis_dict[id]['location']['lon'] = parsefloat(res['longitude'])
-                        permis_dict[id]['location']['lat'] = parsefloat(res['latitude'])
+        resolved=0
+        for id, res in coords.items():
+            with NoFail((id, res)):
+                score = parsefloat(res.get('result_score', None))
+                if score is not None and score > 0.5 :
+                    resolved +=1
+                    permis_dict[id]['location']['lon'] = parsefloat(res['longitude'])
+                    permis_dict[id]['location']['lat'] = parsefloat(res['latitude'])
+
+        eprint("Resolved %d missing location from adresses" % resolved)
 
         # Still no coord ? Use the one of the city and set approx to true
         for id, permis in permis_dict.items() :
